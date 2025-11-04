@@ -11,7 +11,7 @@ Installer script for provisioning Codex CLI dependencies and environment tweaks 
 Run the installer directly from GitHub (PowerShell prompt):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/Baphomet480/deploy-codex-crossplatform/main/install-codex.ps1 | Invoke-Expression"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/Baphomet480/deploy-codex-crossplatform/main/install-codex.ps1 -UseBasicParsing | iex"
 ```
 
 > The script modifies your PowerShell profile to enable completion helpers and may install fonts; review `install-codex.ps1` before running if you need to audit changes.
