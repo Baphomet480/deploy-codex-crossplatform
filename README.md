@@ -11,7 +11,7 @@ Installer script for provisioning Codex CLI dependencies and environment tweaks 
 Run the installer directly from GitHub (PowerShell prompt):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; iex (irm 'https://raw.githubusercontent.com/Baphomet480/deploy-codex-crossplatform/main/install-codex.ps1')"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $temp = Join-Path $env:TEMP 'install-codex.ps1'; Invoke-WebRequest -UseBasicParsing 'https://raw.githubusercontent.com/Baphomet480/deploy-codex-crossplatform/main/install-codex.ps1' -OutFile $temp; Unblock-File $temp -ErrorAction SilentlyContinue; & $temp; Remove-Item $temp -Force"
 ```
 
 > The script modifies your PowerShell profile to enable completion helpers and may install fonts; review `install-codex.ps1` before running if you need to audit changes.
