@@ -1,0 +1,9 @@
+*.DS_Store
+portable/bin/
+portable/cache/
+portable/profile/
+portable/downloads/
+portable/portable/
+portable.zip
+logs/
+cache/
