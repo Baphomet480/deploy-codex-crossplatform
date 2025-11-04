@@ -80,7 +80,11 @@ if (-not [string]::IsNullOrWhiteSpace($env:CODEX_INSTALLER_CACHE)) {
     $cacheRootCandidates += $env:CODEX_INSTALLER_CACHE
 }
 $cacheRootCandidates += (Join-Path -Path $scriptDirectory -ChildPath 'cache')
-$cacheRootCandidates += (Join-Path -Path $env:TEMP -ChildPath 'codex-installer-cache')
+$tempRoot = $env:TEMP
+if ([string]::IsNullOrWhiteSpace($tempRoot)) {
+    $tempRoot = [System.IO.Path]::GetTempPath()
+}
+$cacheRootCandidates += (Join-Path -Path $tempRoot -ChildPath 'codex-installer-cache')
 
 $CACHE_ROOT = Resolve-InstallerCacheRoot -Candidates $cacheRootCandidates
 if (-not $CACHE_ROOT) {
