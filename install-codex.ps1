@@ -60,6 +60,7 @@ $script:InstallerHttpClient = $null
 $script:InstallerHttpClientHandler = $null
 
 $scriptDirectory = $null
+$scriptFromMemory = $false
 if (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
     $scriptDirectory = Split-Path -Path $PSCommandPath -Parent
 }
@@ -68,6 +69,36 @@ elseif (-not [string]::IsNullOrWhiteSpace($MyInvocation.MyCommand.Path)) {
 }
 else {
     $scriptDirectory = (Get-Location).Path
+    $scriptFromMemory = $true
+}
+if ($scriptFromMemory) {
+    $downloadsDirectory = $null
+    try {
+        $downloadsDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::Downloads)
+    }
+    catch {
+        $downloadsDirectory = $null
+    }
+    if (-not $downloadsDirectory -or -not (Test-Path -Path $downloadsDirectory)) {
+        $userProfile = $null
+        try { $userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile) } catch { $userProfile = $env:USERPROFILE }
+        if ($userProfile) {
+            $downloadsDirectory = Join-Path -Path $userProfile -ChildPath 'Downloads'
+        }
+    }
+    if ($downloadsDirectory) {
+        try {
+            if (-not (Test-Path -Path $downloadsDirectory)) {
+                New-Item -ItemType Directory -Path $downloadsDirectory -Force | Out-Null
+            }
+        }
+        catch {
+            $downloadsDirectory = $null
+        }
+    }
+    if ($downloadsDirectory -and (Test-Path -Path $downloadsDirectory)) {
+        $scriptDirectory = $downloadsDirectory
+    }
 }
 if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
     $scriptDirectory = [System.IO.Path]::GetTempPath()
