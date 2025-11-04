@@ -250,6 +250,30 @@ function Test-CachedDownload {
     return $true
 }
 
+function Remove-DownloadCacheEntry {
+    param([Parameter(Mandatory)][string]$CacheKey)
+
+    if ([string]::IsNullOrWhiteSpace($CacheKey)) {
+        return
+    }
+
+    $cachePath = Get-DownloadCachePath -CacheKey $CacheKey
+    if (-not $cachePath) {
+        return
+    }
+
+    foreach ($entry in @($cachePath, "$cachePath.sha256")) {
+        if ($entry -and (Test-Path -LiteralPath $entry)) {
+            try {
+                Remove-Item -LiteralPath $entry -Force -ErrorAction Stop
+            }
+            catch {
+                Write-Verbose ("Unable to remove cache entry {0}: {1}" -f $entry, $_.Exception.Message)
+            }
+        }
+    }
+}
+
 function Invoke-Download {
     param(
         [Parameter(Mandatory)][string]$Uri,
@@ -603,25 +627,55 @@ function Install-WingetPackage {
 function Install-OhMyPoshPortable {
     Write-Verbose 'Installing Oh My Posh via portable release...'
 
-    $release = Get-GitHubLatestRelease -Owner 'JanDeDobbeleer' -Repo 'oh-my-posh'
     $archToken = switch ($env:PROCESSOR_ARCHITECTURE) {
         'ARM64' { 'arm64' }
         default { 'amd64' }
     }
 
     $assetName = "posh-windows-$archToken.exe"
-    $asset = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
-    if (-not $asset) {
-        throw "Suitable Oh My Posh release asset '$assetName' not found."
-    }
-
     Initialize-Directory -Path $CODEX_DOWNLOAD_ROOT
-    $downloadPath = Join-Path -Path $CODEX_DOWNLOAD_ROOT -ChildPath $asset.name
-    $releaseTag = if (-not [string]::IsNullOrWhiteSpace($release.tag_name)) { $release.tag_name } elseif (-not [string]::IsNullOrWhiteSpace($release.name)) { $release.name } else { 'latest' }
-    $cacheKeyBase = Join-Path -Path 'oh-my-posh' -ChildPath (Get-CacheSafeSegment $releaseTag)
-    $cacheKey = Join-Path -Path $cacheKeyBase -ChildPath (Get-CacheSafeSegment $asset.name)
-    $expectedHash = Get-ReleaseAssetExpectedHash -Release $release -Asset $asset -CacheKeyBase $cacheKeyBase -WorkspaceDirectory $CODEX_DOWNLOAD_ROOT
-    Invoke-Download -Uri $asset.browser_download_url -Destination $downloadPath -CacheKey $cacheKey -ExpectedHash $expectedHash
+    $downloadPath = $null
+    $cacheKeyBase = $null
+    $cacheKey = $null
+    $hashCacheKey = $null
+    $checksumsCacheKey = $null
+
+    $attempt = 0
+    $maxAttempts = 2
+    while ($attempt -lt $maxAttempts) {
+        $release = Get-GitHubLatestRelease -Owner 'JanDeDobbeleer' -Repo 'oh-my-posh'
+        $asset = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
+        if (-not $asset) {
+            throw "Suitable Oh My Posh release asset '$assetName' not found."
+        }
+
+        $downloadPath = Join-Path -Path $CODEX_DOWNLOAD_ROOT -ChildPath $asset.name
+        $releaseTag = if (-not [string]::IsNullOrWhiteSpace($release.tag_name)) { $release.tag_name } elseif (-not [string]::IsNullOrWhiteSpace($release.name)) { $release.name } else { 'latest' }
+        $cacheKeyBase = Join-Path -Path 'oh-my-posh' -ChildPath (Get-CacheSafeSegment $releaseTag)
+        $cacheKey = Join-Path -Path $cacheKeyBase -ChildPath (Get-CacheSafeSegment $asset.name)
+        $sha256Name = $asset.name + '.sha256'
+        $hashCacheKey = Join-Path -Path $cacheKeyBase -ChildPath (Get-CacheSafeSegment $sha256Name)
+        $checksumsCacheKey = Join-Path -Path $cacheKeyBase -ChildPath 'checksums.txt'
+        $expectedHash = Get-ReleaseAssetExpectedHash -Release $release -Asset $asset -CacheKeyBase $cacheKeyBase -WorkspaceDirectory $CODEX_DOWNLOAD_ROOT
+
+        try {
+            Invoke-Download -Uri $asset.browser_download_url -Destination $downloadPath -CacheKey $cacheKey -ExpectedHash $expectedHash
+            break
+        }
+        catch {
+            $attempt++
+            $message = $_.Exception.Message
+            if ($attempt -ge $maxAttempts -or $message -notmatch 'hash mismatch') {
+                throw
+            }
+
+            Write-Warning 'Hash verification failed for Oh My Posh portable release; purging cache and retrying with fresh metadata.'
+            Remove-DownloadCacheEntry -CacheKey $cacheKey
+            Remove-DownloadCacheEntry -CacheKey $hashCacheKey
+            Remove-DownloadCacheEntry -CacheKey $checksumsCacheKey
+            Start-Sleep -Seconds 1
+        }
+    }
 
     $installRoot = Join-Path -Path $env:LOCALAPPDATA -ChildPath 'Programs\oh-my-posh'
     Initialize-Directory -Path $installRoot
