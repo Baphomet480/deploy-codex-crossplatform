@@ -59,7 +59,19 @@ function Resolve-InstallerCacheRoot {
 $script:InstallerHttpClient = $null
 $script:InstallerHttpClientHandler = $null
 
-$scriptDirectory = Split-Path -Path $PSCommandPath -Parent
+$scriptDirectory = $null
+if (-not [string]::IsNullOrWhiteSpace($PSCommandPath)) {
+    $scriptDirectory = Split-Path -Path $PSCommandPath -Parent
+}
+elseif (-not [string]::IsNullOrWhiteSpace($MyInvocation.MyCommand.Path)) {
+    $scriptDirectory = Split-Path -Path $MyInvocation.MyCommand.Path -Parent
+}
+else {
+    $scriptDirectory = (Get-Location).Path
+}
+if ([string]::IsNullOrWhiteSpace($scriptDirectory)) {
+    $scriptDirectory = [System.IO.Path]::GetTempPath()
+}
 $cacheRootCandidates = @()
 if (-not [string]::IsNullOrWhiteSpace($CacheRoot)) {
     $cacheRootCandidates += $CacheRoot
