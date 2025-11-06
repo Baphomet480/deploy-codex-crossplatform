@@ -883,24 +883,54 @@ function Set-PSReadLineSupport {
 # ==================== TOOL INSTALLATION ====================
 function Install-RipgrepPortable {
     Write-Warning 'winget did not provide a ripgrep installer - falling back to the portable release.'
-    $release = Get-GitHubLatestRelease -Owner 'BurntSushi' -Repo 'ripgrep'
     $arch = Get-CpuArchitecture
     $pattern = switch ($arch) {
         'aarch64' { '^ripgrep-.*-aarch64-pc-windows-msvc\.zip$' }
         default { '^ripgrep-.*-x86_64-pc-windows-msvc\.zip$' }
     }
 
-    $asset = $release.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
-    if (-not $asset) {
-        throw 'Suitable ripgrep asset not found.'
-    }
+    $archivePath = $null
+    $cacheKeyBase = $null
+    $cacheKey = $null
+    $hashCacheKey = $null
+    $checksumsCacheKey = $null
 
-    $archivePath = Join-Path -Path $CODEX_DOWNLOAD_ROOT -ChildPath $asset.name
-    $releaseTag = if (-not [string]::IsNullOrWhiteSpace($release.tag_name)) { $release.tag_name } elseif (-not [string]::IsNullOrWhiteSpace($release.name)) { $release.name } else { 'latest' }
-    $cacheKeyBase = Join-Path -Path 'ripgrep' -ChildPath (Get-CacheSafeSegment $releaseTag)
-    $cacheKey = Join-Path -Path $cacheKeyBase -ChildPath (Get-CacheSafeSegment $asset.name)
-    $expectedHash = Get-ReleaseAssetExpectedHash -Release $release -Asset $asset -CacheKeyBase $cacheKeyBase -WorkspaceDirectory $CODEX_DOWNLOAD_ROOT
-    Invoke-Download -Uri $asset.browser_download_url -Destination $archivePath -CacheKey $cacheKey -ExpectedHash $expectedHash
+    $attempt = 0
+    $maxAttempts = 2
+    while ($attempt -lt $maxAttempts) {
+        $release = Get-GitHubLatestRelease -Owner 'BurntSushi' -Repo 'ripgrep'
+        $asset = $release.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
+        if (-not $asset) {
+            throw 'Suitable ripgrep asset not found.'
+        }
+
+        $archivePath = Join-Path -Path $CODEX_DOWNLOAD_ROOT -ChildPath $asset.name
+        $releaseTag = if (-not [string]::IsNullOrWhiteSpace($release.tag_name)) { $release.tag_name } elseif (-not [string]::IsNullOrWhiteSpace($release.name)) { $release.name } else { 'latest' }
+        $cacheKeyBase = Join-Path -Path 'ripgrep' -ChildPath (Get-CacheSafeSegment $releaseTag)
+        $cacheKey = Join-Path -Path $cacheKeyBase -ChildPath (Get-CacheSafeSegment $asset.name)
+        $sha256Name = $asset.name + '.sha256'
+        $hashCacheKey = Join-Path -Path $cacheKeyBase -ChildPath (Get-CacheSafeSegment $sha256Name)
+        $checksumsCacheKey = Join-Path -Path $cacheKeyBase -ChildPath 'checksums.txt'
+        $expectedHash = Get-ReleaseAssetExpectedHash -Release $release -Asset $asset -CacheKeyBase $cacheKeyBase -WorkspaceDirectory $CODEX_DOWNLOAD_ROOT
+
+        try {
+            Invoke-Download -Uri $asset.browser_download_url -Destination $archivePath -CacheKey $cacheKey -ExpectedHash $expectedHash
+            break
+        }
+        catch {
+            $attempt++
+            $message = $_.Exception.Message
+            if ($attempt -ge $maxAttempts -or $message -notmatch 'hash mismatch') {
+                throw
+            }
+
+            Write-Warning 'Hash verification failed for ripgrep portable release; purging cache and retrying with fresh metadata.'
+            Remove-DownloadCacheEntry -CacheKey $cacheKey
+            Remove-DownloadCacheEntry -CacheKey $hashCacheKey
+            Remove-DownloadCacheEntry -CacheKey $checksumsCacheKey
+            Start-Sleep -Seconds 1
+        }
+    }
 
     $extractRoot = Join-Path -Path $CODEX_DOWNLOAD_ROOT -ChildPath 'ripgrep'
     if (Test-Path -Path $extractRoot) {
