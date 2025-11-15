@@ -641,7 +641,7 @@ function Test-VcRuntimeInstalled {
         }
     }
 
-    if (-not [Environment]::Is64BitOperatingSystem) {
+    if ([Environment]::Is64BitOperatingSystem) {
         $sysWowCandidates = @(
             Join-Path -Path $winDir -ChildPath 'SysWOW64\vcruntime140.dll'
             Join-Path -Path $winDir -ChildPath 'SysWOW64\vcruntime140_1.dll'
