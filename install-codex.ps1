@@ -447,6 +447,56 @@ function Get-CpuArchitecture {
     }
 }
 
+function Get-WingetArchitecturePreference {
+    $arch = $env:PROCESSOR_ARCHITEW6432
+    if (-not $arch) {
+        $arch = $env:PROCESSOR_ARCHITECTURE
+    }
+
+    if (-not $arch) {
+        return $null
+    }
+
+    switch ($arch.ToUpperInvariant()) {
+        'AMD64' { return 'x64' }
+        'X86' { return 'x86' }
+        'ARM64' { return 'arm64' }
+        'ARM' { return 'arm' }
+        default { return $null }
+    }
+}
+
+function Test-IsProcessElevated {
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        if (-not $identity) {
+            return $false
+        }
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-WingetNoApplicableInstaller {
+    param(
+        [int]$ExitCode,
+        [string]$Output
+    )
+
+    if ($ExitCode -eq -1978335216) {
+        return $true
+    }
+
+    if ($Output -and ($Output -match 'NoApplicableInstallers' -or $Output -match 'No applicable installer')) {
+        return $true
+    }
+
+    return $false
+}
+
 function Set-UserPathEntry {
     param([Parameter(Mandatory)][string]$InstallRoot)
 
@@ -616,17 +666,73 @@ function Install-WingetPackage {
     $wingetCmd = Get-Command winget.exe -ErrorAction Stop
     $wingetExe = $wingetCmd.Path
     Write-Host "Ensuring $DisplayName is installed via winget..."
-    $arguments = @(
+
+    $baseArguments = @(
         'install',
         '--id', $PackageId,
         '--exact',
         '--source', 'winget',
         '--accept-source-agreements',
-        '--accept-package-agreements'
+        '--accept-package-agreements',
+        '--disable-interactivity'
     )
 
-    & $wingetExe @arguments
-    $exitCode = $LASTEXITCODE
+    $argumentSets = New-Object System.Collections.Generic.List[object]
+    $argumentSets.Add($baseArguments)
+
+    $isElevated = Test-IsProcessElevated
+    $archPreference = Get-WingetArchitecturePreference
+
+    if ($isElevated) {
+        $argumentSets.Add($baseArguments + @('--scope', 'machine'))
+    }
+    else {
+        $argumentSets.Add($baseArguments + @('--scope', 'user'))
+    }
+
+    if ($archPreference) {
+        $argumentSets.Add($baseArguments + @('--architecture', $archPreference))
+        if ($isElevated) {
+            $argumentSets.Add($baseArguments + @('--scope', 'machine', '--architecture', $archPreference))
+        }
+    }
+
+    $uniqueArgumentSets = @()
+    $argumentSetKeys = @{}
+    foreach ($argSet in $argumentSets) {
+        if (-not $argSet) { continue }
+        $key = [string]::Join('|', $argSet)
+        if (-not $argumentSetKeys.ContainsKey($key)) {
+            $argumentSetKeys[$key] = $true
+            $uniqueArgumentSets += ,$argSet
+        }
+    }
+
+    $exitCode = 0
+    $lastOutput = ''
+
+    foreach ($args in $uniqueArgumentSets) {
+        $output = & $wingetExe @args 2>&1
+        $exitCode = $LASTEXITCODE
+        $lastOutput = ($output | Out-String).Trim()
+
+        if ($exitCode -eq 0) {
+            break
+        }
+
+        if ($CommandName) {
+            $command = Get-Command $CommandName -ErrorAction SilentlyContinue
+            if ($command) {
+                break
+            }
+        }
+
+        if (-not (Test-WingetNoApplicableInstaller -ExitCode $exitCode -Output $lastOutput)) {
+            break
+        }
+
+        Write-Verbose ("winget reported no applicable installer for {0} (arguments: {1}). Trying alternate arguments..." -f $PackageId, ($args -join ' '))
+    }
 
     $command = $null
     if ($CommandName) {
@@ -649,7 +755,11 @@ function Install-WingetPackage {
             Write-Warning "winget returned exit code $exitCode while installing $DisplayName, but the command '$CommandName' is already available. Continuing."
         }
         else {
-            throw "winget failed to install $DisplayName (exit code $exitCode)."
+            $errorMessage = "winget failed to install $DisplayName (exit code $exitCode)."
+            if ($lastOutput) {
+                $errorMessage += " Output:`n$lastOutput"
+            }
+            throw $errorMessage
         }
     }
     elseif ($CommandName -and -not $command) {
