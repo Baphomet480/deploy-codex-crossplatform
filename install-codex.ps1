@@ -580,6 +580,39 @@ function Install-WingetPackage {
         [string[]]$PathCandidates = @()
     )
 
+    $command = $null
+    if ($CommandName) {
+        $command = Get-Command $CommandName -ErrorAction SilentlyContinue
+    }
+
+    $existingInstallRoots = @()
+    if ($PathCandidates) {
+        foreach ($candidate in $PathCandidates) {
+            if ($candidate -and (Test-Path -Path $candidate)) {
+                $existingInstallRoots += $candidate
+            }
+        }
+    }
+
+    if (-not $command -and $existingInstallRoots) {
+        foreach ($installRoot in $existingInstallRoots) {
+            Set-UserPathEntry -InstallRoot $installRoot
+        }
+        if ($CommandName) {
+            $command = Get-Command $CommandName -ErrorAction SilentlyContinue
+        }
+    }
+
+    if ($command) {
+        Write-Host "$DisplayName is already installed; skipping winget install."
+        return
+    }
+
+    if (-not $CommandName -and $existingInstallRoots) {
+        Write-Host "$DisplayName appears to be already installed; skipping winget install."
+        return
+    }
+
     $wingetCmd = Get-Command winget.exe -ErrorAction Stop
     $wingetExe = $wingetCmd.Path
     Write-Host "Ensuring $DisplayName is installed via winget..."
