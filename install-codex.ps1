@@ -1137,15 +1137,19 @@ function Update-CodexConfig {
     $markerStart = "# >>> $markerName >>>"
     $markerEnd = "# <<< $markerName <<<"
 
+    $preservedPrefix = ''
+
     if ($existingContent) {
         $blockPattern = "(?ms)^\s*" + [regex]::Escape($markerStart) + ".*?" + [regex]::Escape($markerEnd) + "\s*"
         $existingContent = [regex]::Replace($existingContent, $blockPattern, '')
 
         $firstSectionMatch = [regex]::Match($existingContent, "(?m)^\s*\[")
         if ($firstSectionMatch.Success) {
+            $preservedPrefix = $existingContent.Substring(0, $firstSectionMatch.Index)
             $existingContent = $existingContent.Substring($firstSectionMatch.Index)
         }
         else {
+            $preservedPrefix = $existingContent
             $existingContent = ''
         }
 
@@ -1182,6 +1186,18 @@ function Update-CodexConfig {
         )
 
         $existingContent = $existingContent.Trim()
+
+        if ($preservedPrefix) {
+            $prefixContent = $preservedPrefix.Trim()
+            if ($prefixContent) {
+                if ($existingContent) {
+                    $existingContent = $prefixContent + "`r`n`r`n" + $existingContent
+                }
+                else {
+                    $existingContent = $prefixContent
+                }
+            }
+        }
     }
 
     $managedBody = @'
