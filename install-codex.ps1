@@ -624,6 +624,88 @@ function Install-WingetPackage {
     }
 }
 
+function Test-VcRuntimeInstalled {
+    $winDir = $env:WINDIR
+    if (-not $winDir) {
+        return $false
+    }
+
+    $system32Candidates = @(
+        Join-Path -Path $winDir -ChildPath 'System32\vcruntime140.dll'
+        Join-Path -Path $winDir -ChildPath 'System32\vcruntime140_1.dll'
+    ) | Where-Object { $_ }
+
+    foreach ($candidate in $system32Candidates) {
+        if (Test-Path -Path $candidate) {
+            return $true
+        }
+    }
+
+    if (-not [Environment]::Is64BitOperatingSystem) {
+        $sysWowCandidates = @(
+            Join-Path -Path $winDir -ChildPath 'SysWOW64\vcruntime140.dll'
+            Join-Path -Path $winDir -ChildPath 'SysWOW64\vcruntime140_1.dll'
+        ) | Where-Object { $_ }
+
+        foreach ($candidate in $sysWowCandidates) {
+            if (Test-Path -Path $candidate) {
+                return $true
+            }
+        }
+    }
+
+    return $false
+}
+
+function Install-VcRuntimeDirect {
+    Write-Host 'Downloading Microsoft Visual C++ Redistributable (x64)...'
+    $installerName = 'vc_redist.x64.exe'
+    $downloadPath = Join-Path -Path $CODEX_DOWNLOAD_ROOT -ChildPath $installerName
+    $cacheKey = Join-Path -Path 'vcredist' -ChildPath $installerName
+
+    Invoke-Download -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -Destination $downloadPath -CacheKey $cacheKey
+
+    Write-Host 'Installing Microsoft Visual C++ Redistributable (x64)...'
+    $process = Start-Process -FilePath $downloadPath -ArgumentList '/install', '/quiet', '/norestart' -Wait -PassThru -ErrorAction Stop
+    if ($process.ExitCode -ne 0) {
+        throw ("vc_redist.x64.exe returned exit code {0}." -f $process.ExitCode)
+    }
+}
+
+function Ensure-VcRuntime {
+    if (Test-VcRuntimeInstalled) {
+        Write-Verbose 'Microsoft Visual C++ runtime already present.'
+        return
+    }
+
+    Write-Host 'Microsoft Visual C++ runtime not detected - attempting installation...'
+    $installed = $false
+    try {
+        Install-WingetPackage -PackageId 'Microsoft.VCRedist.2015+.x64' -DisplayName 'Microsoft Visual C++ Redistributable 2015-2022 (x64)'
+        $installed = Test-VcRuntimeInstalled
+    }
+    catch {
+        Write-Warning ("winget installation of Microsoft Visual C++ Redistributable failed: {0}" -f $_.Exception.Message)
+    }
+
+    if (-not $installed) {
+        try {
+            Install-VcRuntimeDirect
+            $installed = Test-VcRuntimeInstalled
+        }
+        catch {
+            throw ("Unable to install Microsoft Visual C++ Redistributable (x64): {0}" -f $_.Exception.Message)
+        }
+    }
+
+    if ($installed) {
+        Write-Host 'Microsoft Visual C++ runtime is installed.'
+    }
+    else {
+        throw 'Microsoft Visual C++ runtime installation could not be verified.'
+    }
+}
+
 function Install-OhMyPoshPortable {
     Write-Verbose 'Installing Oh My Posh via portable release...'
 
@@ -1694,6 +1776,8 @@ try {
 
     Install-WingetPackage -PackageId 'Git.Git' -DisplayName 'Git' -CommandName 'git' -PathCandidates $gitCandidates
     Install-WingetPackage -PackageId 'GitHub.cli' -DisplayName 'GitHub CLI' -CommandName 'gh' -PathCandidates $ghCandidates
+
+    Ensure-VcRuntime
 
     Install-OhMyPosh
     Install-WindowsTerminal
