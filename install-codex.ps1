@@ -947,9 +947,25 @@ function Set-PSReadLineSupport {
 
     Write-Host ("Installing PSReadLine >= {0}..." -f $targetVersion)
     try {
+        $loadedPsReadLine = Get-Module -Name PSReadLine -ErrorAction SilentlyContinue
+        if ($loadedPsReadLine) {
+            try {
+                Remove-Module -Name PSReadLine -Force -ErrorAction Stop
+            }
+            catch {
+                Write-Verbose ("Unable to unload existing PSReadLine module before upgrade: {0}" -f $_.Exception.Message)
+            }
+        }
+
         Install-Module -Name PSReadLine -MinimumVersion $targetVersion.ToString() -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
         $updated = Get-Module -ListAvailable -Name PSReadLine | Sort-Object Version -Descending | Select-Object -First 1
         if ($updated -and $updated.Version -ge $targetVersion) {
+            try {
+                Import-Module -Name PSReadLine -RequiredVersion $updated.Version -Force -ErrorAction Stop | Out-Null
+            }
+            catch {
+                Write-Verbose ("Unable to import PSReadLine {0} into current session: {1}" -f $updated.Version, $_.Exception.Message)
+            }
             Publish-ModuleToModulePaths -ModuleInfo $updated
             Write-Host ("PSReadLine {0} installed." -f $updated.Version)
         }
@@ -1108,104 +1124,146 @@ function Update-CodexConfig {
     $configPath = Join-Path -Path $configDir -ChildPath 'config.toml'
     Initialize-Directory -Path $configDir
 
-    $content = ''
+    $existingContent = ''
     if (Test-Path -Path $configPath) {
-        $content = Get-Content -Path $configPath -Raw -ErrorAction SilentlyContinue
+        $existingContent = Get-Content -Path $configPath -Raw -ErrorAction SilentlyContinue
     }
 
-    if (-not $content) {
-        $content = ""
+    if (-not $existingContent) {
+        $existingContent = ''
     }
 
-    $requiredSettings = [ordered]@{
-        'model'                  = '"gpt-5-codex"'
-        'approval_policy'        = '"never"'
-        'sandbox_mode'           = '"danger-full-access"'
-        'model_reasoning_effort' = '"medium"'
-        'skip_git_repo_check'    = 'true'
-    }
+    $markerName = 'codex-installer managed settings'
+    $markerStart = "# >>> $markerName >>>"
+    $markerEnd = "# <<< $markerName <<<"
 
-    $missingSettings = @()
-    foreach ($entry in $requiredSettings.GetEnumerator()) {
-        $escapedKey = [regex]::Escape($entry.Key)
-        if ($content -match "(?m)^\s*$escapedKey\s*=") {
-            $replacement = "{0} = {1}" -f $entry.Key, $entry.Value
-            $content = [regex]::Replace($content, "(?m)^\s*$escapedKey\s*=\s*.*$", $replacement)
+    if ($existingContent) {
+        $blockPattern = "(?ms)^\s*" + [regex]::Escape($markerStart) + ".*?" + [regex]::Escape($markerEnd) + "\s*"
+        $existingContent = [regex]::Replace($existingContent, $blockPattern, '')
+
+        $firstSectionMatch = [regex]::Match($existingContent, "(?m)^\s*\[")
+        if ($firstSectionMatch.Success) {
+            $existingContent = $existingContent.Substring($firstSectionMatch.Index)
         }
         else {
-            $missingSettings += ("{0} = {1}" -f $entry.Key, $entry.Value)
+            $existingContent = ''
         }
-    }
-    if ($missingSettings.Count -gt 0) {
-        $prefix = ($missingSettings -join "`r`n") + "`r`n"
-        $content = $prefix + $content.TrimStart()
-    }
 
-    $toolsSectionPattern = "(?ms)(^\s*\[tools\]\s*\r?\n)(.*?)(?=^\s*\[|\z)"
-    $content = [regex]::Replace(
-        $content,
-        $toolsSectionPattern,
-        {
-            param($match)
-            $body = $match.Groups[2].Value
-            $stripped = [regex]::Replace($body, "(?m)^\s*web_search\s*=\s*.*(\r?\n)?", '')
-            if ($stripped.Trim()) {
-                return $match.Groups[1].Value + $stripped
-            }
-            else {
-                return ''
-            }
+        $managedSections = @(
+            'features',
+            'profiles.fast',
+            'profiles.fast.features',
+            'profiles.deep',
+            'profiles.deep.features',
+            'profiles.deep-experimental',
+            'profiles.deep-experimental.features'
+        )
+        foreach ($section in $managedSections) {
+            $escaped = [regex]::Escape($section)
+            $sectionPattern = "(?ms)^\s*\[$escaped\]\s*\r?\n.*?(?=^\s*\[|\z)"
+            $existingContent = [regex]::Replace($existingContent, $sectionPattern, '')
         }
-    )
 
-    $content = Set-TomlSectionValue -Content $content -Section 'features' -Key 'web_search_request' -Value 'true'
-    $content = Set-TomlSectionValue -Content $content -Section 'features' -Key 'rmcp_client' -Value 'true'
+        $toolsSectionPattern = "(?ms)(^\s*\[tools\]\s*\r?\n)(.*?)(?=^\s*\[|\z)"
+        $existingContent = [regex]::Replace(
+            $existingContent,
+            $toolsSectionPattern,
+            {
+                param($match)
+                $body = $match.Groups[2].Value
+                $stripped = [regex]::Replace($body, "(?m)^\s*web_search\s*=\s*.*(\r?\n)?", '')
+                if ($stripped.Trim()) {
+                    return $match.Groups[1].Value + $stripped
+                }
+                else {
+                    return ''
+                }
+            }
+        )
 
-    if (-not $content.EndsWith("`r`n")) {
-        $content += "`r`n"
+        $existingContent = $existingContent.Trim()
     }
 
-    Set-Content -Path $configPath -Value $content -Encoding UTF8
+    $managedBody = @'
+model = "gpt-5-codex"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+model_reasoning_effort = "medium"
+
+skip_git_repo_check = true
+
+profile = "deep"
+[features]
+web_search_request = true
+rmcp_client = true
+unified_exec = false                       # disabled on Windows: triggers DLL errors
+streamable_shell = true
+apply_patch_freeform = true
+experimental_sandbox_command_assessment = false # default: false in 0.57 (temporarily disabled; see deep-experimental profile)
+ghost_commit = true
+# view_image_tool default is true; left unset to keep default
+
+# --- Profiles --------------------------------------------------------------
+[profiles.fast]
+# Minimal, speedy: web search + RMCP + ghost commits, dangerous sandbox
+approval_policy = "never"                 # keep non-interactive
+sandbox_mode = "danger-full-access"       # allow filesystem/network freely
+skip_git_repo_check = true                 # skip repo root checks
+
+[profiles.fast.features]
+web_search_request = true                  # enable web.run requests
+rmcp_client = true                         # enable HTTP MCP clients
+ghost_commit = true                        # default: false in 0.57 (override -> true)
+# Explicitly disable heavy features for speed (defaults are already false)
+unified_exec = false                       # default: false in 0.57
+streamable_shell = false                   # default: false in 0.57
+apply_patch_freeform = false               # default: false in 0.57
+experimental_sandbox_command_assessment = false  # default: false in 0.57
+# view_image_tool default is true; left unset
+
+[profiles.deep]
+# Mirrors current feature-rich setup (this session)
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+skip_git_repo_check = true
+model_reasoning_effort = "high"
+model = "gpt-5-codex"
+
+[profiles.deep.features]
+web_search_request = true
+rmcp_client = true
+unified_exec = false                       # disabled on Windows: triggers DLL errors
+streamable_shell = true                    # default: false in 0.57 (override)
+apply_patch_freeform = true                # default: false in 0.57 (override)
+experimental_sandbox_command_assessment = false  # default: false in 0.57 (temporarily disabled; use deep-experimental)
+ghost_commit = true                        # default: false in 0.57 (override)
+# view_image_tool default is true; left unset
+
+[profiles.deep-experimental]
+# Same as deep but re-enables experimental sandbox risk assessments
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+skip_git_repo_check = true
+model_reasoning_effort = "medium"
+
+[profiles.deep-experimental.features]
+web_search_request = true
+rmcp_client = true
+unified_exec = false                       # disabled on Windows: triggers DLL errors
+streamable_shell = true
+apply_patch_freeform = true
+experimental_sandbox_command_assessment = true   # default: false in 0.57 (override)
+ghost_commit = true
+# view_image_tool default is true; left unset
+'@.Trim()
+
+    $managedBlock = $markerStart + "`r`n" + $managedBody + "`r`n" + $markerEnd + "`r`n"
+    if ($existingContent) {
+        $managedBlock += "`r`n" + $existingContent + "`r`n"
+    }
+
+    Set-Content -Path $configPath -Value $managedBlock -Encoding UTF8
     Write-Host "Codex configuration updated at $configPath."
-}
-
-function Set-TomlSectionValue {
-    param(
-        [Parameter(Mandatory)][string]$Content,
-        [Parameter(Mandatory)][string]$Section,
-        [Parameter(Mandatory)][string]$Key,
-        [Parameter(Mandatory)][string]$Value
-    )
-
-    $escapedSection = [regex]::Escape($Section)
-    $sectionPattern = "(?ms)(^\s*\[$escapedSection\]\s*\r?\n)(.*?)(?=^\s*\[|\z)"
-    $match = [regex]::Match($Content, $sectionPattern)
-    if ($match.Success) {
-        $sectionBody = $match.Groups[2].Value
-        $escapedKey = [regex]::Escape($Key)
-        $keyPattern = "(?m)^\s*$escapedKey\s*="
-        if ($sectionBody -match $keyPattern) {
-            $updatedBody = [regex]::Replace($sectionBody, "(?m)^\s*$escapedKey\s*=\s*.*$", "$Key = $Value")
-        }
-        else {
-            $trimmed = $sectionBody.TrimEnd()
-            if ($trimmed) {
-                $updatedBody = $trimmed + "`r`n$Key = $Value`r`n"
-            }
-            else {
-                $updatedBody = "$Key = $Value`r`n"
-            }
-        }
-        $start = $match.Groups[2].Index
-        $length = $match.Groups[2].Length
-        return $Content.Substring(0, $start) + $updatedBody + $Content.Substring($start + $length)
-    }
-    else {
-        if (-not $Content.EndsWith("`r`n")) {
-            $Content += "`r`n"
-        }
-        return $Content + "`r`n[$Section]`r`n$Key = $Value`r`n"
-    }
 }
 
 # ==================== PROFILE & FONT MANAGEMENT ====================
@@ -1429,7 +1487,7 @@ function Remove-ProfileBlockContent {
     }
 
     return [pscustomobject]@{
-        Lines = $remainingLines
+        Lines       = $remainingLines
         InsertIndex = $insertIndex
     }
 }
