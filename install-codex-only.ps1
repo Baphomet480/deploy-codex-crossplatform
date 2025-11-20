@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$Force
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -23,6 +25,25 @@ function Get-CpuArchitecture {
         'ARM64' { return 'aarch64' }
         default { return 'x86_64' }
     }
+}
+
+function Compare-VersionStrings {
+    param(
+        [Parameter(Mandatory)][string]$A,
+        [Parameter(Mandatory)][string]$B
+    )
+
+    $parse = {
+        param($s)
+        $match = [regex]::Match($s, '(\d+(\.\d+)+)')
+        if (-not $match.Success) { return $null }
+        return [version]$match.Groups[1].Value
+    }
+
+    $va = & $parse $A
+    $vb = & $parse $B
+    if (-not $va -or -not $vb) { return 0 }
+    return $va.CompareTo($vb)
 }
 
 function Get-CacheRoot {
@@ -135,16 +156,24 @@ public static class FontUtil {
 }
 
 function Install-Git {
-    if (Get-Command git.exe -ErrorAction SilentlyContinue) {
-        Write-Host 'Git already present; skipping.'
-        return
-    }
-
     $arch        = Get-CpuArchitecture
     $assetPattern = if ($arch -eq 'aarch64') { 'Git-*-arm64.exe' } else { 'Git-*-64-bit.exe' }
     $release     = Invoke-RestMethod -Uri 'https://api.github.com/repos/git-for-windows/git/releases/latest' -Headers $GITHUB_HEADERS
     $asset       = $release.assets | Where-Object { $_.name -like $assetPattern } | Select-Object -First 1
     if (-not $asset) { throw "No Git installer matching $assetPattern found in latest release." }
+
+    $current = $null
+    if (Get-Command git.exe -ErrorAction SilentlyContinue) {
+        $current = (git --version 2>$null | Select-Object -First 1)
+    }
+    $latestTag = $release.tag_name
+    if (-not $Force -and $current -and $latestTag) {
+        if (Compare-VersionStrings -A $current -B $latestTag -ge 0) {
+            Write-Host "Git already at $current (latest $latestTag); skipping."
+            return
+        }
+        Write-Host "Git present ($current) but outdated vs $latestTag; updating..."
+    }
 
     $installerPath = Join-Path -Path (Get-CacheRoot) -ChildPath $asset.name
     Download-WithRetry -Uri $asset.browser_download_url -OutFile $installerPath
@@ -156,16 +185,24 @@ function Install-Git {
 }
 
 function Install-GitHubCli {
-    if (Get-Command gh.exe -ErrorAction SilentlyContinue) {
-        Write-Host 'GitHub CLI already present; skipping.'
-        return
-    }
-
     $arch        = Get-CpuArchitecture
     $assetPattern = if ($arch -eq 'aarch64') { 'gh_*_windows_arm64.msi' } else { 'gh_*_windows_amd64.msi' }
     $release     = Invoke-RestMethod -Uri 'https://api.github.com/repos/cli/cli/releases/latest' -Headers $GITHUB_HEADERS
     $asset       = $release.assets | Where-Object { $_.name -like $assetPattern } | Select-Object -First 1
     if (-not $asset) { throw "No GitHub CLI installer matching $assetPattern found in latest release." }
+
+    $current = $null
+    if (Get-Command gh.exe -ErrorAction SilentlyContinue) {
+        $current = (gh --version 2>$null | Select-Object -First 1)
+    }
+    $latestTag = $release.tag_name
+    if (-not $Force -and $current -and $latestTag) {
+        if (Compare-VersionStrings -A $current -B $latestTag -ge 0) {
+            Write-Host "GitHub CLI already at $current (latest $latestTag); skipping."
+            return
+        }
+        Write-Host "GitHub CLI present ($current) but outdated vs $latestTag; updating..."
+    }
 
     $installerPath = Join-Path -Path (Get-CacheRoot) -ChildPath $asset.name
     Download-WithRetry -Uri $asset.browser_download_url -OutFile $installerPath
@@ -186,6 +223,24 @@ function Install-Codex {
 
     if (-not $asset) {
         throw "No Windows asset matching $assetName found in latest release."
+    }
+
+    $currentVersion = $null
+    try {
+        $currentVersion = (codex --version 2>$null | Select-Object -First 1)
+    } catch { }
+    if (-not $currentVersion) {
+        $installedFile = Join-Path -Path (Join-Path -Path $env:LOCALAPPDATA -ChildPath 'Programs\\Codex') -ChildPath 'codex-version.txt'
+        if (Test-Path -Path $installedFile) {
+            $currentVersion = Get-Content -Path $installedFile -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+    }
+    if (-not $Force -and $currentVersion) {
+        if (Compare-VersionStrings -A $currentVersion -B $version -ge 0) {
+            Write-Host "Codex already at $currentVersion (latest $version); skipping."
+            return @{ Version = $currentVersion; InstallRoot = $null; Executable = $null }
+        }
+        Write-Host "Codex present ($currentVersion) but outdated vs $version; updating..."
     }
 
     $cacheRoot   = Get-CacheRoot
