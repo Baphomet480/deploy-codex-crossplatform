@@ -9,6 +9,7 @@ if ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]
 }
 
 $GITHUB_HEADERS = @{ 'User-Agent' = 'codex-lite-installer' }
+$CACHE_ROOT     = Join-Path -Path $env:TEMP -ChildPath 'codex-lite-cache'
 
 function Ensure-Directory {
     param([Parameter(Mandatory)][string]$Path)
@@ -22,6 +23,11 @@ function Get-CpuArchitecture {
         'ARM64' { return 'aarch64' }
         default { return 'x86_64' }
     }
+}
+
+function Get-CacheRoot {
+    Ensure-Directory -Path $CACHE_ROOT
+    return $CACHE_ROOT
 }
 
 function Set-UserPathEntry {
@@ -52,6 +58,51 @@ function Get-LatestCodexRelease {
     return Invoke-RestMethod -Uri $apiUrl -Headers $GITHUB_HEADERS
 }
 
+function Install-Git {
+    if (Get-Command git.exe -ErrorAction SilentlyContinue) {
+        Write-Host 'Git already present; skipping.'
+        return
+    }
+
+    $arch        = Get-CpuArchitecture
+    $assetPattern = if ($arch -eq 'aarch64') { 'Git-*-arm64.exe' } else { 'Git-*-64-bit.exe' }
+    $release     = Invoke-RestMethod -Uri 'https://api.github.com/repos/git-for-windows/git/releases/latest' -Headers $GITHUB_HEADERS
+    $asset       = $release.assets | Where-Object { $_.name -like $assetPattern } | Select-Object -First 1
+    if (-not $asset) { throw "No Git installer matching $assetPattern found in latest release." }
+
+    $installerPath = Join-Path -Path (Get-CacheRoot) -ChildPath $asset.name
+    Write-Host "Downloading $($asset.name)..."
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installerPath -Headers $GITHUB_HEADERS -UseBasicParsing -ErrorAction Stop
+
+    Write-Host 'Installing Git silently...'
+    $proc = Start-Process -FilePath $installerPath -ArgumentList '/VERYSILENT','/NORESTART','/SP-' -Wait -PassThru -WindowStyle Hidden
+    if ($proc.ExitCode -ne 0) { throw "Git installer failed with exit code $($proc.ExitCode)." }
+    Write-Host 'Git installed.'
+}
+
+function Install-GitHubCli {
+    if (Get-Command gh.exe -ErrorAction SilentlyContinue) {
+        Write-Host 'GitHub CLI already present; skipping.'
+        return
+    }
+
+    $arch        = Get-CpuArchitecture
+    $assetPattern = if ($arch -eq 'aarch64') { 'gh_*_windows_arm64.msi' } else { 'gh_*_windows_amd64.msi' }
+    $release     = Invoke-RestMethod -Uri 'https://api.github.com/repos/cli/cli/releases/latest' -Headers $GITHUB_HEADERS
+    $asset       = $release.assets | Where-Object { $_.name -like $assetPattern } | Select-Object -First 1
+    if (-not $asset) { throw "No GitHub CLI installer matching $assetPattern found in latest release." }
+
+    $installerPath = Join-Path -Path (Get-CacheRoot) -ChildPath $asset.name
+    Write-Host "Downloading $($asset.name)..."
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installerPath -Headers $GITHUB_HEADERS -UseBasicParsing -ErrorAction Stop
+
+    Write-Host 'Installing GitHub CLI silently...'
+    $args = @('/i', $installerPath, '/qn', '/norestart', 'ALLUSERS=2', 'MSIINSTALLPERUSER=1')
+    $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList $args -Wait -PassThru -WindowStyle Hidden
+    if ($proc.ExitCode -ne 0) { throw "GitHub CLI installer failed with exit code $($proc.ExitCode)." }
+    Write-Host 'GitHub CLI installed.'
+}
+
 function Install-Codex {
     $release    = Get-LatestCodexRelease
     $version    = if ($release.name) { $release.name } elseif ($release.tag_name) { $release.tag_name } else { 'unknown' }
@@ -63,8 +114,7 @@ function Install-Codex {
         throw "No Windows asset matching $assetName found in latest release."
     }
 
-    $cacheRoot   = Join-Path -Path $env:TEMP -ChildPath 'codex-lite-cache'
-    Ensure-Directory -Path $cacheRoot
+    $cacheRoot   = Get-CacheRoot
     $archivePath = Join-Path -Path $cacheRoot -ChildPath $asset.name
 
     Write-Host "Downloading $($asset.name)..."
@@ -191,5 +241,9 @@ Write-Host '--- Installing Codex (lite) ---'
 $install = Install-Codex
 Write-Host '--- Updating config ---'
 Write-CodexConfig
+Write-Host '--- Ensuring Git ---'
+Install-Git
+Write-Host '--- Ensuring GitHub CLI ---'
+Install-GitHubCli
 Write-Host ''
 Write-Host "Done. Launch a new terminal or run 'codex --help' to verify. (Installed $($install.Version))"
