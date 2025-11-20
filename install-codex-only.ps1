@@ -13,14 +13,14 @@ if ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]
 $GITHUB_HEADERS = @{ 'User-Agent' = 'codex-lite-installer' }
 $CACHE_ROOT     = Join-Path -Path $env:TEMP -ChildPath 'codex-lite-cache'
 
-function Ensure-Directory {
+function Set-DirectoryPresent {
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
         New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
 }
 
-function Ensure-ArchiveModule {
+function Import-ArchiveModule {
     # On older Windows/PowerShell (e.g., Server 2016), Expand-Archive may not be preloaded.
     if (-not (Get-Command Expand-Archive -ErrorAction SilentlyContinue)) {
         Import-Module Microsoft.PowerShell.Archive -ErrorAction Stop
@@ -36,14 +36,14 @@ function Assert-MinimumPSVersion {
 
 function Assert-WindowsHost {
     # $IsWindows is not present on some Windows PowerShell builds; fall back to environment check.
-    $isWindows = $false
+    $hostIsWindows = $false
     if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) {
-        $isWindows = [bool]$IsWindows
+        $hostIsWindows = [bool]$IsWindows
     }
-    if (-not $isWindows) {
-        $isWindows = ($env:OS -eq 'Windows_NT')
+    if (-not $hostIsWindows) {
+        $hostIsWindows = ($env:OS -eq 'Windows_NT')
     }
-    if (-not $isWindows) {
+    if (-not $hostIsWindows) {
         throw "This installer targets Windows. Please run on Windows PowerShell 5.1+ or PowerShell (pwsh) on Windows."
     }
 }
@@ -75,7 +75,7 @@ function Compare-VersionStrings {
 }
 
 function Get-CacheRoot {
-    Ensure-Directory -Path $CACHE_ROOT
+    Set-DirectoryPresent -Path $CACHE_ROOT
     return $CACHE_ROOT
 }
 
@@ -107,7 +107,7 @@ function Get-LatestCodexRelease {
     return Invoke-RestMethod -Uri $apiUrl -Headers $GITHUB_HEADERS
 }
 
-function Download-WithRetry {
+function Invoke-DownloadWithRetry {
     param(
         [Parameter(Mandatory)][string]$Uri,
         [Parameter(Mandatory)][string]$OutFile,
@@ -137,10 +137,10 @@ function Download-WithRetry {
 function Install-NerdFont {
     param([string]$FontName = 'Meslo')
 
-    Ensure-ArchiveModule
+    Import-ArchiveModule
 
     $fontDir = Join-Path -Path $env:LOCALAPPDATA -ChildPath 'Microsoft\\Windows\\Fonts'
-    Ensure-Directory -Path $fontDir
+    Set-DirectoryPresent -Path $fontDir
 
     if (Get-ChildItem -Path $fontDir -Filter "$FontName* Nerd Font*.ttf" -ErrorAction SilentlyContinue | Select-Object -First 1) {
         Write-Host "$FontName Nerd Font already present; skipping."
@@ -169,7 +169,7 @@ function Install-NerdFont {
     $extractPath = Join-Path -Path $cacheRoot -ChildPath 'nerd-fonts-extracted'
     if (Test-Path -Path $extractPath) { Remove-Item -Path $extractPath -Recurse -Force }
 
-    Download-WithRetry -Uri $asset.browser_download_url -OutFile $archivePath
+    Invoke-DownloadWithRetry -Uri $asset.browser_download_url -OutFile $archivePath
     Expand-Archive -Path $archivePath -DestinationPath $extractPath -Force
 
     $ttfFiles = Get-ChildItem -Path $extractPath -Filter '*.ttf' -Recurse
@@ -222,7 +222,7 @@ function Install-Git {
     }
 
     $installerPath = Join-Path -Path (Get-CacheRoot) -ChildPath $asset.name
-    Download-WithRetry -Uri $asset.browser_download_url -OutFile $installerPath
+    Invoke-DownloadWithRetry -Uri $asset.browser_download_url -OutFile $installerPath
 
     Write-Host 'Installing Git silently...'
     $proc = Start-Process -FilePath $installerPath -ArgumentList '/VERYSILENT','/NORESTART','/SP-' -Wait -PassThru -WindowStyle Hidden
@@ -251,11 +251,11 @@ function Install-GitHubCli {
     }
 
     $installerPath = Join-Path -Path (Get-CacheRoot) -ChildPath $asset.name
-    Download-WithRetry -Uri $asset.browser_download_url -OutFile $installerPath
+    Invoke-DownloadWithRetry -Uri $asset.browser_download_url -OutFile $installerPath
 
     Write-Host 'Installing GitHub CLI silently...'
-    $args = @('/i', $installerPath, '/qn', '/norestart', 'ALLUSERS=2', 'MSIINSTALLPERUSER=1')
-    $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList $args -Wait -PassThru -WindowStyle Hidden
+    $msiArguments = @('/i', $installerPath, '/qn', '/norestart', 'ALLUSERS=2', 'MSIINSTALLPERUSER=1')
+    $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList $msiArguments -Wait -PassThru -WindowStyle Hidden
     if ($proc.ExitCode -ne 0) { throw "GitHub CLI installer failed with exit code $($proc.ExitCode)." }
     Write-Host 'GitHub CLI installed.'
 }
@@ -297,11 +297,11 @@ function Install-VCRuntime {
     $outFile  = Join-Path -Path (Get-CacheRoot) -ChildPath $fileName
 
     Write-Host "Downloading VC++ Runtime for $arch..."
-    Download-WithRetry -Uri $assetUrl -OutFile $outFile
+    Invoke-DownloadWithRetry -Uri $assetUrl -OutFile $outFile
 
     Write-Host "Installing VC++ Runtime silently..."
-    $args = '/install','/quiet','/norestart'
-    $proc = Start-Process -FilePath $outFile -ArgumentList $args -Wait -PassThru -WindowStyle Hidden
+    $vcRedistArguments = '/install','/quiet','/norestart'
+    $proc = Start-Process -FilePath $outFile -ArgumentList $vcRedistArguments -Wait -PassThru -WindowStyle Hidden
     if ($proc.ExitCode -ne 0) {
         throw "VC++ Runtime installer failed with exit code $($proc.ExitCode)."
     }
@@ -309,7 +309,7 @@ function Install-VCRuntime {
 }
 
 function Install-Codex {
-    Ensure-ArchiveModule
+    Import-ArchiveModule
 
     $release     = Get-LatestCodexRelease
     $version     = if ($release.name) { $release.name } elseif ($release.tag_name) { $release.tag_name } else { 'unknown' }
@@ -355,7 +355,7 @@ function Install-Codex {
     $cacheRoot   = Get-CacheRoot
     $archivePath = Join-Path -Path $cacheRoot -ChildPath $asset.name
 
-    Download-WithRetry -Uri $asset.browser_download_url -OutFile $archivePath
+    Invoke-DownloadWithRetry -Uri $asset.browser_download_url -OutFile $archivePath
 
     $extractPath = Join-Path -Path $cacheRoot -ChildPath 'extracted'
     if (Test-Path -Path $extractPath) {
@@ -368,7 +368,7 @@ function Install-Codex {
         throw 'Codex executable not found in the downloaded archive.'
     }
 
-    Ensure-Directory -Path $installRoot
+    Set-DirectoryPresent -Path $installRoot
     Copy-Item -Path $downloadedExe.FullName -Destination $exePath -Force
 
     $versionFile = Join-Path -Path $installRoot -ChildPath 'codex-version.txt'
@@ -383,7 +383,7 @@ function Install-Codex {
 function Write-CodexConfig {
     $configDir  = Join-Path -Path $env:USERPROFILE -ChildPath '.codex'
     $configPath = Join-Path -Path $configDir -ChildPath 'config.toml'
-    Ensure-Directory -Path $configDir
+    Set-DirectoryPresent -Path $configDir
 
     $existing = ''
     if (Test-Path -Path $configPath) {
@@ -400,7 +400,7 @@ function Write-CodexConfig {
     }
 
     $managedBody = @'
-model = "gpt-5-codex"
+model = "gpt-5.1-codex-max"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 model_reasoning_effort = "medium"
@@ -436,7 +436,7 @@ approval_policy = "never"
 sandbox_mode = "danger-full-access"
 skip_git_repo_check = true
 model_reasoning_effort = "high"
-model = "gpt-5-codex"
+model = "gpt-5.1-codex-max"
 
 [profiles.deep.features]
 web_search_request = true

@@ -780,8 +780,8 @@ function Install-WingetPackage {
     $exitCode = 0
     $lastOutput = ''
 
-    foreach ($args in $uniqueArgumentSets) {
-        $output = & $wingetExe @args 2>&1
+    foreach ($argumentSet in $uniqueArgumentSets) {
+        $output = & $wingetExe @$argumentSet 2>&1
         $exitCode = $LASTEXITCODE
         $lastOutput = ($output | Out-String).Trim()
 
@@ -800,7 +800,7 @@ function Install-WingetPackage {
             break
         }
 
-        Write-Verbose ("winget reported no applicable installer for {0} (arguments: {1}). Trying alternate arguments..." -f $PackageId, ($args -join ' '))
+        Write-Verbose ("winget reported no applicable installer for {0} (arguments: {1}). Trying alternate arguments..." -f $PackageId, ($argumentSet -join ' '))
     }
 
     $command = $null
@@ -884,7 +884,7 @@ function Install-VcRuntimeDirect {
     }
 }
 
-function Ensure-VcRuntime {
+function Install-VcRuntime {
     if (Test-VcRuntimeInstalled) {
         Write-Verbose 'Microsoft Visual C++ runtime already present.'
         return
@@ -1498,7 +1498,7 @@ function Update-CodexConfig {
     }
 
     $managedBody = @'
-model = "gpt-5-codex"
+model = "gpt-5.1-codex-max"
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
 model_reasoning_effort = "medium"
@@ -1540,7 +1540,7 @@ approval_policy = "never"
 sandbox_mode = "danger-full-access"
 skip_git_repo_check = true
 model_reasoning_effort = "high"
-model = "gpt-5-codex"
+model = "gpt-5.1-codex-max"
 
 [profiles.deep.features]
 web_search_request = true
@@ -2202,7 +2202,7 @@ try {
         Write-Warning 'GitHub CLI is not available. Install it manually if you rely on gh.'
     }
 
-    Ensure-VcRuntime
+    Install-VcRuntime
 
     Install-OhMyPosh
     Install-WindowsTerminal
