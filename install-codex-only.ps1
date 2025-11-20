@@ -10,6 +10,7 @@ if ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 }
 
+$null = Assert-WindowsPowerShell
 $null = Assert-MinimumPSVersion
 
 $GITHUB_HEADERS = @{ 'User-Agent' = 'codex-lite-installer' }
@@ -33,6 +34,12 @@ function Assert-MinimumPSVersion {
     $min = [version]'5.1'
     if ($PSVersionTable.PSVersion -lt $min) {
         throw "PowerShell $($PSVersionTable.PSVersion) detected; Codex installer requires $min or newer (present by default on Windows Server 2016+)."
+    }
+}
+
+function Assert-WindowsPowerShell {
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        throw "This installer must run under Windows PowerShell (powershell.exe), not pwsh. Please rerun using powershell.exe 5.1+."
     }
 }
 
