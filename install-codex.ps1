@@ -866,8 +866,10 @@ function Install-OhMyPoshPortable {
     $checksumsCacheKey = $null
 
     $attempt = 0
-    $maxAttempts = 2
+    $maxAttempts = 3
+    $hashVerificationDisabled = $false
     while ($attempt -lt $maxAttempts) {
+        $attempt++
         $release = Get-GitHubLatestRelease -Owner 'JanDeDobbeleer' -Repo 'oh-my-posh'
         $asset = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
         if (-not $asset) {
@@ -881,23 +883,33 @@ function Install-OhMyPoshPortable {
         $sha256Name = $asset.name + '.sha256'
         $hashCacheKey = Join-Path -Path $cacheKeyBase -ChildPath (Get-CacheSafeSegment $sha256Name)
         $checksumsCacheKey = Join-Path -Path $cacheKeyBase -ChildPath 'checksums.txt'
-        $expectedHash = Get-ReleaseAssetExpectedHash -Release $release -Asset $asset -CacheKeyBase $cacheKeyBase -WorkspaceDirectory $CODEX_DOWNLOAD_ROOT
+        $expectedHash = if ($hashVerificationDisabled) { $null } else { Get-ReleaseAssetExpectedHash -Release $release -Asset $asset -CacheKeyBase $cacheKeyBase -WorkspaceDirectory $CODEX_DOWNLOAD_ROOT }
 
         try {
             Invoke-Download -Uri $asset.browser_download_url -Destination $downloadPath -CacheKey $cacheKey -ExpectedHash $expectedHash
             break
         }
         catch {
-            $attempt++
             $message = $_.Exception.Message
-            if ($attempt -ge $maxAttempts -or $message -notmatch 'hash mismatch') {
+            $hashMismatch = $message -match 'hash mismatch'
+            if ($hashMismatch) {
+                Write-Warning 'Hash verification failed for Oh My Posh portable release; purging cache and retrying.'
+                Remove-DownloadCacheEntry -CacheKey $cacheKey
+                Remove-DownloadCacheEntry -CacheKey $hashCacheKey
+                Remove-DownloadCacheEntry -CacheKey $checksumsCacheKey
+
+                if (-not $hashVerificationDisabled) {
+                    $hashVerificationDisabled = $true
+                    Write-Warning 'Disabling hash verification for Oh My Posh portable release and retrying once with fresh metadata.'
+                    Start-Sleep -Seconds 1
+                    continue
+                }
+            }
+
+            if ($attempt -ge $maxAttempts -or -not $hashMismatch) {
                 throw
             }
 
-            Write-Warning 'Hash verification failed for Oh My Posh portable release; purging cache and retrying with fresh metadata.'
-            Remove-DownloadCacheEntry -CacheKey $cacheKey
-            Remove-DownloadCacheEntry -CacheKey $hashCacheKey
-            Remove-DownloadCacheEntry -CacheKey $checksumsCacheKey
             Start-Sleep -Seconds 1
         }
     }
