@@ -244,6 +244,54 @@ function Install-GitHubCli {
     Write-Host 'GitHub CLI installed.'
 }
 
+function Test-VCRuntimeInstalled {
+    param([string]$Arch)
+
+    $keyName = switch ($Arch) {
+        'aarch64' { 'Arm64' }
+        default   { 'x64' }
+    }
+    $regPath = "HKLM:\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\$keyName"
+    try {
+        $key = Get-ItemProperty -Path $regPath -ErrorAction Stop
+        if ($key -and $key.Installed -eq 1 -and $key.MinimumVersion -gt 0) {
+            return $true
+        }
+    } catch { }
+
+    # Fallback: look for vcruntime140.dll in system folders.
+    $dllName = 'vcruntime140.dll'
+    $systemPaths = @("$env:SystemRoot\\System32", "$env:SystemRoot\\SysWOW64")
+    foreach ($p in $systemPaths) {
+        $candidate = Join-Path -Path $p -ChildPath $dllName
+        if (Test-Path -Path $candidate) { return $true }
+    }
+    return $false
+}
+
+function Install-VCRuntime {
+    $arch = Get-CpuArchitecture
+    if (Test-VCRuntimeInstalled -Arch $arch) {
+        Write-Host "VC++ Runtime already present for $arch; skipping."
+        return
+    }
+
+    $assetUrl = if ($arch -eq 'aarch64') { 'https://aka.ms/vs/17/release/vc_redist.arm64.exe' } else { 'https://aka.ms/vs/17/release/vc_redist.x64.exe' }
+    $fileName = Split-Path -Leaf $assetUrl
+    $outFile  = Join-Path -Path (Get-CacheRoot) -ChildPath $fileName
+
+    Write-Host "Downloading VC++ Runtime for $arch..."
+    Download-WithRetry -Uri $assetUrl -OutFile $outFile
+
+    Write-Host "Installing VC++ Runtime silently..."
+    $args = '/install','/quiet','/norestart'
+    $proc = Start-Process -FilePath $outFile -ArgumentList $args -Wait -PassThru -WindowStyle Hidden
+    if ($proc.ExitCode -ne 0) {
+        throw "VC++ Runtime installer failed with exit code $($proc.ExitCode)."
+    }
+    Write-Host "VC++ Runtime installed."
+}
+
 function Install-Codex {
     Ensure-ArchiveModule
 
@@ -411,6 +459,8 @@ ghost_commit = true
 Write-Host '--- Installing Codex (lite) ---'
 Assert-WindowsHost
 Assert-MinimumPSVersion
+Write-Host '--- Ensuring VC++ Runtime ---'
+Install-VCRuntime
 $install = Install-Codex
 Write-Host '--- Updating config ---'
 Write-CodexConfig
