@@ -107,7 +107,7 @@ function Download-WithRetry {
 }
 
 function Install-NerdFont {
-    param([string]$FontName = 'CascadiaCode')
+    param([string]$FontName = 'Menlo')
 
     $fontDir = Join-Path -Path $env:LOCALAPPDATA -ChildPath 'Microsoft\\Windows\\Fonts'
     Ensure-Directory -Path $fontDir
@@ -373,7 +373,7 @@ Write-Host '--- Ensuring Git ---'
 Install-Git
 Write-Host '--- Ensuring GitHub CLI ---'
 Install-GitHubCli
-Write-Host '--- Installing Nerd Font (Cascadia Code) ---'
-Install-NerdFont -FontName 'CascadiaCode'
+Write-Host '--- Installing Nerd Font (Menlo) ---'
+Install-NerdFont -FontName 'Menlo'
 Write-Host ''
 Write-Host "Done. Launch a new terminal or run 'codex --help' to verify. (Installed $($install.Version))"
