@@ -1540,7 +1540,23 @@ function Install-NerdFont {
 }
 
 function Set-ConsoleDefaults {
-    param([Parameter(Mandatory)][string]$FontFamily)
+    param([Parameter(Mandatory)][object]$FontFamily)
+
+    $fontFamilyValue = $FontFamily
+    if ($fontFamilyValue -is [System.Collections.IEnumerable] -and -not ($fontFamilyValue -is [string])) {
+        $fontFamilyValue = ($fontFamilyValue | Select-Object -First 1)
+    }
+
+    try {
+        $fontFamilyValue = [string]$fontFamilyValue
+    }
+    catch {
+        throw "Unable to interpret provided font family value as a string: $($_.Exception.Message)"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($fontFamilyValue)) {
+        throw 'Font family value cannot be empty.'
+    }
 
     $trueTypeKey = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Console\TrueTypeFont'
     $trueTypeProps = Get-ItemProperty -Path $trueTypeKey -ErrorAction SilentlyContinue
@@ -1548,7 +1564,7 @@ function Set-ConsoleDefaults {
         throw "Unable to access $trueTypeKey."
     }
 
-    $fontAlreadyListed = $trueTypeProps.PSObject.Properties | Where-Object { $_.Value -eq $FontFamily }
+    $fontAlreadyListed = $trueTypeProps.PSObject.Properties | Where-Object { $_.Value -eq $fontFamilyValue }
     if (-not $fontAlreadyListed) {
         $existingNumericNames = $trueTypeProps.PSObject.Properties |
         Where-Object { $_.Name -match '^[0-9]+$' } |
@@ -1556,11 +1572,11 @@ function Set-ConsoleDefaults {
         Sort-Object
         $nextIndex = if ($existingNumericNames.Count -gt 0) { $existingNumericNames[-1] + 1 } else { 0 }
         $propertyName = "{0:D3}" -f $nextIndex
-        New-ItemProperty -Path $trueTypeKey -Name $propertyName -Value $FontFamily -PropertyType String | Out-Null
-        Write-Host "Registered $FontFamily as a console TrueType font."
+        New-ItemProperty -Path $trueTypeKey -Name $propertyName -Value $fontFamilyValue -PropertyType String | Out-Null
+        Write-Host "Registered $fontFamilyValue as a console TrueType font."
     }
     else {
-        Write-Host "$FontFamily already registered as a console TrueType font."
+        Write-Host "$fontFamilyValue already registered as a console TrueType font."
     }
 
     $consoleKeys = @(
@@ -1574,19 +1590,19 @@ function Set-ConsoleDefaults {
             New-Item -Path $keyPath -Force | Out-Null
         }
         $existingFaceName = (Get-ItemProperty -Path $keyPath -Name 'FaceName' -ErrorAction SilentlyContinue).FaceName
-        if ($existingFaceName -and $existingFaceName -eq $FontFamily) {
+        if ($existingFaceName -and $existingFaceName -eq $fontFamilyValue) {
             Write-Verbose ("Font already configured for {0}." -f $keyPath)
         }
         else {
             Write-Verbose ("Setting console font for {0}." -f $keyPath)
         }
-        New-ItemProperty -Path $keyPath -Name 'FaceName' -Value $FontFamily -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $keyPath -Name 'FaceName' -Value $fontFamilyValue -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $keyPath -Name 'FontFamily' -Value 54 -PropertyType DWord -Force | Out-Null
         New-ItemProperty -Path $keyPath -Name 'FontWeight' -Value 400 -PropertyType DWord -Force | Out-Null
         New-ItemProperty -Path $keyPath -Name 'FontSize' -Value 0x00100000 -PropertyType DWord -Force | Out-Null
     }
 
-    Write-Host "Set $FontFamily as the default console font for Command Prompt and Windows PowerShell."
+    Write-Host "Set $fontFamilyValue as the default console font for Command Prompt and Windows PowerShell."
 }
 
 function Get-PowerShellProfilePath {
