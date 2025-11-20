@@ -58,6 +58,33 @@ function Get-LatestCodexRelease {
     return Invoke-RestMethod -Uri $apiUrl -Headers $GITHUB_HEADERS
 }
 
+function Download-WithRetry {
+    param(
+        [Parameter(Mandatory)][string]$Uri,
+        [Parameter(Mandatory)][string]$OutFile,
+        [int]$MaxAttempts = 4,
+        [int]$DelaySeconds = 3
+    )
+
+    if (Test-Path -LiteralPath $OutFile) {
+        Write-Host "Using cached $OutFile"
+        return
+    }
+
+    for ($i = 1; $i -le $MaxAttempts; $i++) {
+        try {
+            Write-Host "Downloading $Uri (attempt $i/$MaxAttempts)..."
+            Invoke-WebRequest -Uri $Uri -OutFile $OutFile -Headers $GITHUB_HEADERS -UseBasicParsing -ErrorAction Stop
+            return
+        } catch {
+            if ($i -eq $MaxAttempts) { throw }
+            $wait = [Math]::Pow(2, $i - 1) * $DelaySeconds
+            Write-Warning "Download failed: $($_.Exception.Message). Retrying in $wait seconds..."
+            Start-Sleep -Seconds $wait
+        }
+    }
+}
+
 function Install-NerdFont {
     param([string]$FontName = 'CascadiaCode')
 
@@ -78,8 +105,7 @@ function Install-NerdFont {
     $extractPath = Join-Path -Path $cacheRoot -ChildPath 'nerd-fonts-extracted'
     if (Test-Path -Path $extractPath) { Remove-Item -Path $extractPath -Recurse -Force }
 
-    Write-Host "Downloading $($asset.name)..."
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archivePath -Headers $GITHUB_HEADERS -UseBasicParsing -ErrorAction Stop
+    Download-WithRetry -Uri $asset.browser_download_url -OutFile $archivePath
     Expand-Archive -Path $archivePath -DestinationPath $extractPath -Force
 
     $ttfFiles = Get-ChildItem -Path $extractPath -Filter '*.ttf' -Recurse
@@ -121,8 +147,7 @@ function Install-Git {
     if (-not $asset) { throw "No Git installer matching $assetPattern found in latest release." }
 
     $installerPath = Join-Path -Path (Get-CacheRoot) -ChildPath $asset.name
-    Write-Host "Downloading $($asset.name)..."
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installerPath -Headers $GITHUB_HEADERS -UseBasicParsing -ErrorAction Stop
+    Download-WithRetry -Uri $asset.browser_download_url -OutFile $installerPath
 
     Write-Host 'Installing Git silently...'
     $proc = Start-Process -FilePath $installerPath -ArgumentList '/VERYSILENT','/NORESTART','/SP-' -Wait -PassThru -WindowStyle Hidden
@@ -143,8 +168,7 @@ function Install-GitHubCli {
     if (-not $asset) { throw "No GitHub CLI installer matching $assetPattern found in latest release." }
 
     $installerPath = Join-Path -Path (Get-CacheRoot) -ChildPath $asset.name
-    Write-Host "Downloading $($asset.name)..."
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installerPath -Headers $GITHUB_HEADERS -UseBasicParsing -ErrorAction Stop
+    Download-WithRetry -Uri $asset.browser_download_url -OutFile $installerPath
 
     Write-Host 'Installing GitHub CLI silently...'
     $args = @('/i', $installerPath, '/qn', '/norestart', 'ALLUSERS=2', 'MSIINSTALLPERUSER=1')
@@ -167,8 +191,7 @@ function Install-Codex {
     $cacheRoot   = Get-CacheRoot
     $archivePath = Join-Path -Path $cacheRoot -ChildPath $asset.name
 
-    Write-Host "Downloading $($asset.name)..."
-    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archivePath -Headers $GITHUB_HEADERS -UseBasicParsing -ErrorAction Stop
+    Download-WithRetry -Uri $asset.browser_download_url -OutFile $archivePath
 
     $extractPath = Join-Path -Path $cacheRoot -ChildPath 'extracted'
     if (Test-Path -Path $extractPath) {
