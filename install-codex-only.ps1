@@ -135,7 +135,7 @@ function Download-WithRetry {
 }
 
 function Install-NerdFont {
-    param([string]$FontName = 'Menlo')
+    param([string]$FontName = 'Meslo')
 
     Ensure-ArchiveModule
 
@@ -148,8 +148,21 @@ function Install-NerdFont {
     }
 
     $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/ryanoasis/nerd-fonts/releases/latest' -Headers $GITHUB_HEADERS
-    $asset   = $release.assets | Where-Object { $_.name -ieq "$FontName.zip" } | Select-Object -First 1
-    if (-not $asset) { throw "No Nerd Font asset $FontName.zip found in latest release." }
+
+    $candidates = @($FontName, 'Meslo', 'JetBrainsMono', 'CascadiaCode')
+    $asset = $null
+    foreach ($name in $candidates) {
+        $asset = $release.assets | Where-Object { $_.name -ieq "$name.zip" } | Select-Object -First 1
+        if ($asset) {
+            if ($name -ne $FontName) {
+                Write-Warning "Requested font '$FontName' not found; falling back to '$name'."
+            }
+            break
+        }
+    }
+    if (-not $asset) {
+        throw "No suitable Nerd Font asset found (tried: $($candidates -join ', '))."
+    }
 
     $cacheRoot   = Get-CacheRoot
     $archivePath = Join-Path -Path $cacheRoot -ChildPath $asset.name
