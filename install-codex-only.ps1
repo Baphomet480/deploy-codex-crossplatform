@@ -215,30 +215,43 @@ function Install-GitHubCli {
 }
 
 function Install-Codex {
-    $release    = Get-LatestCodexRelease
-    $version    = if ($release.name) { $release.name } elseif ($release.tag_name) { $release.tag_name } else { 'unknown' }
-    $arch       = Get-CpuArchitecture
-    $assetName  = "codex-$arch-pc-windows-msvc*.zip"
-    $asset      = $release.assets | Where-Object { $_.name -like $assetName } | Select-Object -First 1
+    $release     = Get-LatestCodexRelease
+    $version     = if ($release.name) { $release.name } elseif ($release.tag_name) { $release.tag_name } else { 'unknown' }
+    $arch        = Get-CpuArchitecture
+    $assetName   = "codex-$arch-pc-windows-msvc*.zip"
+    $asset       = $release.assets | Where-Object { $_.name -like $assetName } | Select-Object -First 1
+    $installRoot = Join-Path -Path $env:LOCALAPPDATA -ChildPath 'Programs\\Codex'
+    $exePath     = Join-Path -Path $installRoot -ChildPath 'codex.exe'
 
     if (-not $asset) {
         throw "No Windows asset matching $assetName found in latest release."
     }
 
     $currentVersion = $null
+
     try {
+        # Prefer a real executable on PATH for truth.
         $currentVersion = (codex --version 2>$null | Select-Object -First 1)
     } catch { }
+
     if (-not $currentVersion) {
-        $installedFile = Join-Path -Path (Join-Path -Path $env:LOCALAPPDATA -ChildPath 'Programs\\Codex') -ChildPath 'codex-version.txt'
+        $installedFile = Join-Path -Path $installRoot -ChildPath 'codex-version.txt'
         if (Test-Path -Path $installedFile) {
             $currentVersion = Get-Content -Path $installedFile -ErrorAction SilentlyContinue | Select-Object -First 1
         }
     }
+
+    # If a version marker exists but the exe is gone, force reinstall.
+    if ($currentVersion -and -not (Test-Path -Path $exePath)) {
+        Write-Host "Codex version marker found but executable missing; reinstalling..."
+        $currentVersion = $null
+    }
+
     if (-not $Force -and $currentVersion) {
         if ((Compare-VersionStrings -A $currentVersion -B $version) -ge 0) {
-            Write-Host "Codex already at $currentVersion (latest $version); skipping."
-            return @{ Version = $currentVersion; InstallRoot = $null; Executable = $null }
+            Write-Host "Codex already at $currentVersion (latest $version); ensuring PATH entry and skipping download."
+            Set-UserPathEntry -InstallRoot $installRoot
+            return @{ Version = $currentVersion; InstallRoot = $installRoot; Executable = $exePath }
         }
         Write-Host "Codex present ($currentVersion) but outdated vs $version; updating..."
     }
@@ -259,9 +272,7 @@ function Install-Codex {
         throw 'Codex executable not found in the downloaded archive.'
     }
 
-    $installRoot = Join-Path -Path $env:LOCALAPPDATA -ChildPath 'Programs\\Codex'
     Ensure-Directory -Path $installRoot
-    $exePath = Join-Path -Path $installRoot -ChildPath 'codex.exe'
     Copy-Item -Path $downloadedExe.FullName -Destination $exePath -Force
 
     $versionFile = Join-Path -Path $installRoot -ChildPath 'codex-version.txt'
@@ -374,6 +385,10 @@ Install-Git
 Write-Host '--- Ensuring GitHub CLI ---'
 Install-GitHubCli
 Write-Host '--- Installing Nerd Font (Menlo) ---'
-Install-NerdFont -FontName 'Menlo'
+try {
+    Install-NerdFont -FontName 'Menlo'
+} catch {
+    Write-Warning "Nerd Font install failed: $($_.Exception.Message). Continuing without font."
+}
 Write-Host ''
 Write-Host "Done. Launch a new terminal or run 'codex --help' to verify. (Installed $($install.Version))"
