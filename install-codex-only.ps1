@@ -58,6 +58,56 @@ function Get-LatestCodexRelease {
     return Invoke-RestMethod -Uri $apiUrl -Headers $GITHUB_HEADERS
 }
 
+function Install-NerdFont {
+    param([string]$FontName = 'CascadiaCode')
+
+    $fontDir = Join-Path -Path $env:LOCALAPPDATA -ChildPath 'Microsoft\\Windows\\Fonts'
+    Ensure-Directory -Path $fontDir
+
+    if (Get-ChildItem -Path $fontDir -Filter "$FontName* Nerd Font*.ttf" -ErrorAction SilentlyContinue | Select-Object -First 1) {
+        Write-Host "$FontName Nerd Font already present; skipping."
+        return
+    }
+
+    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/ryanoasis/nerd-fonts/releases/latest' -Headers $GITHUB_HEADERS
+    $asset   = $release.assets | Where-Object { $_.name -ieq "$FontName.zip" } | Select-Object -First 1
+    if (-not $asset) { throw "No Nerd Font asset $FontName.zip found in latest release." }
+
+    $cacheRoot   = Get-CacheRoot
+    $archivePath = Join-Path -Path $cacheRoot -ChildPath $asset.name
+    $extractPath = Join-Path -Path $cacheRoot -ChildPath 'nerd-fonts-extracted'
+    if (Test-Path -Path $extractPath) { Remove-Item -Path $extractPath -Recurse -Force }
+
+    Write-Host "Downloading $($asset.name)..."
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archivePath -Headers $GITHUB_HEADERS -UseBasicParsing -ErrorAction Stop
+    Expand-Archive -Path $archivePath -DestinationPath $extractPath -Force
+
+    $ttfFiles = Get-ChildItem -Path $extractPath -Filter '*.ttf' -Recurse
+    if (-not $ttfFiles) { throw "No TTF files found in $FontName package." }
+
+    if (-not ('Win32.FontUtil' -as [type])) {
+        Add-Type -Namespace Win32 -Name FontUtil -MemberDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class FontUtil {
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern int AddFontResourceEx(string lpszFilename, uint fl, IntPtr pdv);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern int SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+}
+"@
+    }
+
+    foreach ($file in $ttfFiles) {
+        $dest = Join-Path -Path $fontDir -ChildPath $file.Name
+        Copy-Item -Path $file.FullName -Destination $dest -Force
+        [Win32.FontUtil]::AddFontResourceEx($dest, 0, [IntPtr]::Zero) | Out-Null
+    }
+
+    [Win32.FontUtil]::SendMessageTimeout([IntPtr]0xffff, 0x001D, [IntPtr]0, [IntPtr]0, 0, 1000, [ref]([IntPtr]::Zero)) | Out-Null
+    Write-Host "$FontName Nerd Font installed for current user."
+}
+
 function Install-Git {
     if (Get-Command git.exe -ErrorAction SilentlyContinue) {
         Write-Host 'Git already present; skipping.'
@@ -245,5 +295,7 @@ Write-Host '--- Ensuring Git ---'
 Install-Git
 Write-Host '--- Ensuring GitHub CLI ---'
 Install-GitHubCli
+Write-Host '--- Installing Nerd Font (Cascadia Code) ---'
+Install-NerdFont -FontName 'CascadiaCode'
 Write-Host ''
 Write-Host "Done. Launch a new terminal or run 'codex --help' to verify. (Installed $($install.Version))"
