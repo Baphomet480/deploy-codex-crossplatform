@@ -2019,7 +2019,9 @@ try {
     }
     catch {
         $message = $_.Exception.Message
-        if ($message -match 'exit code -1978335216' -or $message -match 'NoApplicableInstallers' -or $message -match 'No applicable installer') {
+        $fallbackNeeded = ($message -match 'exit code -1978335216' -or $message -match 'NoApplicableInstallers' -or $message -match 'No applicable installer' -or $message -match 'exit code -1073741819')
+
+        if ($fallbackNeeded) {
             $rgFallback = Install-RipgrepPortable
             $rgFallbackUsed = $true
         }
