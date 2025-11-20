@@ -10,9 +10,6 @@ if ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 }
 
-$null = Assert-WindowsHost
-$null = Assert-MinimumPSVersion
-
 $GITHUB_HEADERS = @{ 'User-Agent' = 'codex-lite-installer' }
 $CACHE_ROOT     = Join-Path -Path $env:TEMP -ChildPath 'codex-lite-cache'
 
@@ -38,7 +35,15 @@ function Assert-MinimumPSVersion {
 }
 
 function Assert-WindowsHost {
-    if (-not $IsWindows) {
+    # $IsWindows is not present on some Windows PowerShell builds; fall back to environment check.
+    $isWindows = $false
+    if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) {
+        $isWindows = [bool]$IsWindows
+    }
+    if (-not $isWindows) {
+        $isWindows = ($env:OS -eq 'Windows_NT')
+    }
+    if (-not $isWindows) {
         throw "This installer targets Windows. Please run on Windows PowerShell 5.1+ or PowerShell (pwsh) on Windows."
     }
 }
@@ -404,6 +409,8 @@ ghost_commit = true
 }
 
 Write-Host '--- Installing Codex (lite) ---'
+Assert-WindowsHost
+Assert-MinimumPSVersion
 $install = Install-Codex
 Write-Host '--- Updating config ---'
 Write-CodexConfig
