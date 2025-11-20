@@ -10,6 +10,8 @@ if ([Net.ServicePointManager]::SecurityProtocol -band [Net.SecurityProtocolType]
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 }
 
+$null = Assert-MinimumPSVersion
+
 $GITHUB_HEADERS = @{ 'User-Agent' = 'codex-lite-installer' }
 $CACHE_ROOT     = Join-Path -Path $env:TEMP -ChildPath 'codex-lite-cache'
 
@@ -17,6 +19,20 @@ function Ensure-Directory {
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
         New-Item -ItemType Directory -Path $Path -Force | Out-Null
+    }
+}
+
+function Ensure-ArchiveModule {
+    # On older Windows/PowerShell (e.g., Server 2016), Expand-Archive may not be preloaded.
+    if (-not (Get-Command Expand-Archive -ErrorAction SilentlyContinue)) {
+        Import-Module Microsoft.PowerShell.Archive -ErrorAction Stop
+    }
+}
+
+function Assert-MinimumPSVersion {
+    $min = [version]'5.1'
+    if ($PSVersionTable.PSVersion -lt $min) {
+        throw "PowerShell $($PSVersionTable.PSVersion) detected; Codex installer requires $min or newer (present by default on Windows Server 2016+)."
     }
 }
 
@@ -108,6 +124,8 @@ function Download-WithRetry {
 
 function Install-NerdFont {
     param([string]$FontName = 'Menlo')
+
+    Ensure-ArchiveModule
 
     $fontDir = Join-Path -Path $env:LOCALAPPDATA -ChildPath 'Microsoft\\Windows\\Fonts'
     Ensure-Directory -Path $fontDir
@@ -215,6 +233,8 @@ function Install-GitHubCli {
 }
 
 function Install-Codex {
+    Ensure-ArchiveModule
+
     $release     = Get-LatestCodexRelease
     $version     = if ($release.name) { $release.name } elseif ($release.tag_name) { $release.tag_name } else { 'unknown' }
     $arch        = Get-CpuArchitecture
