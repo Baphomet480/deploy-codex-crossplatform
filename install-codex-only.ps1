@@ -168,7 +168,7 @@ function Install-Git {
     }
     $latestTag = $release.tag_name
     if (-not $Force -and $current -and $latestTag) {
-        if (Compare-VersionStrings -A $current -B $latestTag -ge 0) {
+        if ((Compare-VersionStrings -A $current -B $latestTag) -ge 0) {
             Write-Host "Git already at $current (latest $latestTag); skipping."
             return
         }
@@ -197,7 +197,7 @@ function Install-GitHubCli {
     }
     $latestTag = $release.tag_name
     if (-not $Force -and $current -and $latestTag) {
-        if (Compare-VersionStrings -A $current -B $latestTag -ge 0) {
+        if ((Compare-VersionStrings -A $current -B $latestTag) -ge 0) {
             Write-Host "GitHub CLI already at $current (latest $latestTag); skipping."
             return
         }
@@ -236,7 +236,7 @@ function Install-Codex {
         }
     }
     if (-not $Force -and $currentVersion) {
-        if (Compare-VersionStrings -A $currentVersion -B $version -ge 0) {
+        if ((Compare-VersionStrings -A $currentVersion -B $version) -ge 0) {
             Write-Host "Codex already at $currentVersion (latest $version); skipping."
             return @{ Version = $currentVersion; InstallRoot = $null; Executable = $null }
         }
