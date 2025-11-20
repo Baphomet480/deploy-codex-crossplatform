@@ -409,6 +409,9 @@ function Get-ReleaseAssetExpectedHash {
 
     if (-not $expectedHash) {
         $checksumsAsset = $Release.assets | Where-Object { $_.name -eq 'checksums.txt' } | Select-Object -First 1
+        if (-not $checksumsAsset) {
+            $checksumsAsset = $Release.assets | Where-Object { $_.name -match 'checksums.*\.txt$' } | Select-Object -First 1
+        }
         if ($checksumsAsset) {
             $checksumsCacheKey = Join-Path -Path $CacheKeyBase -ChildPath 'checksums.txt'
             $checksumsPath = Join-Path -Path $WorkspaceDirectory -ChildPath 'checksums.txt'
@@ -565,6 +568,36 @@ function Get-WingetInstallerPath {
     return $null
 }
 
+function Test-WingetSupported {
+    $osVersion = [Environment]::OSVersion.Version
+    $productType = 1
+    try {
+        $productType = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).ProductType
+    }
+    catch {
+        try {
+            $productType = (Get-WmiObject -Class Win32_OperatingSystem -ErrorAction Stop).ProductType
+        }
+        catch {
+            $productType = 1
+        }
+    }
+
+    $isServer = ($productType -ne 1)
+    if ($osVersion.Major -lt 10) {
+        return $false
+    }
+
+    if ($isServer -and $osVersion.Major -eq 10 -and $osVersion.Build -lt 17763) {
+        return $false
+    }
+
+    return $true
+}
+
+$script:WingetSupported = $null
+$script:WingetAvailable = $false
+
 function Install-NuGetProvider {
     $provider = Get-PackageProvider -Name 'NuGet' -ListAvailable -ErrorAction SilentlyContinue
     if (-not $provider) {
@@ -587,8 +620,20 @@ function Set-PSGalleryTrust {
 }
 
 function Install-WingetIfMissing {
+    if ($null -eq $script:WingetSupported) {
+        $script:WingetSupported = Test-WingetSupported
+    }
+
+    if (-not $script:WingetSupported) {
+        $osVersion = [Environment]::OSVersion.Version
+        Write-Warning ("winget is not supported on this OS (build {0}). Skipping winget-based installs." -f $osVersion)
+        $script:WingetAvailable = $false
+        return $false
+    }
+
     if (Get-Command winget.exe -ErrorAction SilentlyContinue) {
         Write-Host 'winget already installed.'
+        $script:WingetAvailable = $true
         return
     }
 
@@ -599,8 +644,24 @@ function Install-WingetIfMissing {
 
     $installerPath = Get-WingetInstallerPath
     if ($installerPath) {
-        Write-Host 'Updating existing winget-install helper script...'
-        & $installerPath -SelfUpdate
+        Write-Host 'Using existing winget-install helper script...'
+        $selfUpdateSucceeded = $false
+        try {
+            & $installerPath -SelfUpdate
+            $selfUpdateSucceeded = $true
+        }
+        catch {
+            # Older winget-install versions (including on Server 2016) don't have -SelfUpdate; fall back to running directly.
+            Write-Verbose ("winget-install -SelfUpdate not supported: {0}. Running without it." -f $_.Exception.Message)
+        }
+        if (-not $selfUpdateSucceeded) {
+            try {
+                & $installerPath -Force
+            }
+            catch {
+                Write-Verbose ("winget-install without -SelfUpdate failed: {0}" -f $_.Exception.Message)
+            }
+        }
     }
     else {
         Write-Host 'Downloading winget-install helper script from PowerShell Gallery...'
@@ -620,6 +681,8 @@ function Install-WingetIfMissing {
     }
 
     Write-Host 'winget installed successfully.'
+    $script:WingetAvailable = $true
+    return $true
 }
 
 function Install-WingetPackage {
@@ -629,6 +692,10 @@ function Install-WingetPackage {
         [string]$CommandName,
         [string[]]$PathCandidates = @()
     )
+
+    if (-not $script:WingetAvailable) {
+        throw 'winget is unavailable on this system.'
+    }
 
     $command = $null
     if ($CommandName) {
@@ -846,6 +913,67 @@ function Ensure-VcRuntime {
     }
     else {
         throw 'Microsoft Visual C++ runtime installation could not be verified.'
+    }
+}
+
+function Install-GitDirect {
+    Write-Host 'Installing Git via direct download...'
+
+    $release = Get-GitHubLatestRelease -Owner 'git-for-windows' -Repo 'git'
+    $asset = $release.assets | Where-Object { $_.name -match '^Git-.*-64-bit\.exe$' } | Select-Object -First 1
+    if (-not $asset) {
+        throw 'Suitable Git for Windows installer not found in release assets.'
+    }
+
+    $releaseTag = if (-not [string]::IsNullOrWhiteSpace($release.tag_name)) { $release.tag_name } elseif (-not [string]::IsNullOrWhiteSpace($release.name)) { $release.name } else { 'latest' }
+    $cacheKeyBase = Join-Path -Path 'git-for-windows' -ChildPath (Get-CacheSafeSegment $releaseTag)
+    $installerPath = Join-Path -Path $CODEX_DOWNLOAD_ROOT -ChildPath $asset.name
+    $cacheKey = Join-Path -Path $cacheKeyBase -ChildPath (Get-CacheSafeSegment $asset.name)
+
+    $expectedHash = $null
+    try {
+        $expectedHash = Get-ReleaseAssetExpectedHash -Release $release -Asset $asset -CacheKeyBase $cacheKeyBase -WorkspaceDirectory $CODEX_DOWNLOAD_ROOT
+    }
+    catch {
+        Write-Verbose ("Unable to resolve expected hash for Git installer: {0}" -f $_.Exception.Message)
+    }
+
+    Invoke-Download -Uri $asset.browser_download_url -Destination $installerPath -CacheKey $cacheKey -ExpectedHash $expectedHash
+
+    $arguments = @('/VERYSILENT', '/NORESTART', '/NOCANCEL', '/SP-')
+    $process = Start-Process -FilePath $installerPath -ArgumentList $arguments -Wait -PassThru -ErrorAction Stop
+    if ($process.ExitCode -ne 0) {
+        throw ("Git installer exited with code {0}." -f $process.ExitCode)
+    }
+}
+
+function Install-GitHubCliDirect {
+    Write-Host 'Installing GitHub CLI via direct download...'
+
+    $release = Get-GitHubLatestRelease -Owner 'cli' -Repo 'cli'
+    $asset = $release.assets | Where-Object { $_.name -match 'windows_amd64\.msi$' } | Select-Object -First 1
+    if (-not $asset) {
+        throw 'Suitable GitHub CLI MSI not found in release assets.'
+    }
+
+    $releaseTag = if (-not [string]::IsNullOrWhiteSpace($release.tag_name)) { $release.tag_name } elseif (-not [string]::IsNullOrWhiteSpace($release.name)) { $release.name } else { 'latest' }
+    $cacheKeyBase = Join-Path -Path 'github-cli' -ChildPath (Get-CacheSafeSegment $releaseTag)
+    $msiPath = Join-Path -Path $CODEX_DOWNLOAD_ROOT -ChildPath $asset.name
+    $cacheKey = Join-Path -Path $cacheKeyBase -ChildPath (Get-CacheSafeSegment $asset.name)
+
+    $expectedHash = $null
+    try {
+        $expectedHash = Get-ReleaseAssetExpectedHash -Release $release -Asset $asset -CacheKeyBase $cacheKeyBase -WorkspaceDirectory $CODEX_DOWNLOAD_ROOT
+    }
+    catch {
+        Write-Verbose ("Unable to resolve expected hash for GitHub CLI installer: {0}" -f $_.Exception.Message)
+    }
+
+    Invoke-Download -Uri $asset.browser_download_url -Destination $msiPath -CacheKey $cacheKey -ExpectedHash $expectedHash
+
+    $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList @('/i', "`"$msiPath`"", '/qn', '/norestart') -Wait -PassThru -ErrorAction Stop
+    if ($process.ExitCode -ne 0) {
+        throw ("GitHub CLI MSI installer exited with code {0}." -f $process.ExitCode)
     }
 }
 
@@ -2003,7 +2131,7 @@ try {
     Initialize-Directory -Path $CODEX_DOWNLOAD_ROOT
     Initialize-Directory -Path $FONT_DOWNLOAD_ROOT
 
-    Install-WingetIfMissing
+    $wingetAvailable = Install-WingetIfMissing
 
     $programFiles = [Environment]::GetEnvironmentVariable('ProgramFiles')
     $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
@@ -2031,8 +2159,46 @@ try {
     if ($programFilesX86) { $ghCandidates += Join-Path $programFilesX86 'GitHub CLI' }
     $ghCandidates = $ghCandidates | Where-Object { $_ } | Select-Object -Unique
 
-    Install-WingetPackage -PackageId 'Git.Git' -DisplayName 'Git' -CommandName 'git' -PathCandidates $gitCandidates
-    Install-WingetPackage -PackageId 'GitHub.cli' -DisplayName 'GitHub CLI' -CommandName 'gh' -PathCandidates $ghCandidates
+    $gitCommand = Get-Command git -ErrorAction SilentlyContinue
+    if (-not $gitCommand -and $wingetAvailable) {
+        try {
+            Install-WingetPackage -PackageId 'Git.Git' -DisplayName 'Git' -CommandName 'git' -PathCandidates $gitCandidates
+        }
+        catch {
+            Write-Warning ("winget installation of Git failed: {0}. Falling back to direct installer." -f $_.Exception.Message)
+        }
+        $gitCommand = Get-Command git -ErrorAction SilentlyContinue
+    }
+    if (-not $gitCommand) {
+        Install-GitDirect
+        $gitCommand = Get-Command git -ErrorAction SilentlyContinue
+    }
+    if (-not $gitCommand) {
+        throw 'Git installation failed.'
+    }
+
+    $ghCommand = Get-Command gh -ErrorAction SilentlyContinue
+    if (-not $ghCommand -and $wingetAvailable) {
+        try {
+            Install-WingetPackage -PackageId 'GitHub.cli' -DisplayName 'GitHub CLI' -CommandName 'gh' -PathCandidates $ghCandidates
+        }
+        catch {
+            Write-Warning ("winget installation of GitHub CLI failed: {0}. Falling back to direct installer." -f $_.Exception.Message)
+        }
+        $ghCommand = Get-Command gh -ErrorAction SilentlyContinue
+    }
+    if (-not $ghCommand) {
+        try {
+            Install-GitHubCliDirect
+            $ghCommand = Get-Command gh -ErrorAction SilentlyContinue
+        }
+        catch {
+            Write-Warning ("GitHub CLI installation failed: {0}" -f $_.Exception.Message)
+        }
+    }
+    if (-not $ghCommand) {
+        Write-Warning 'GitHub CLI is not available. Install it manually if you rely on gh.'
+    }
 
     Ensure-VcRuntime
 
