@@ -176,14 +176,17 @@ function Install-NerdFont {
     if (-not $ttfFiles) { throw "No TTF files found in $FontName package." }
 
     if (-not ('Win32.FontUtil' -as [type])) {
-        Add-Type -Namespace Win32 -Name FontUtil -MemberDefinition @"
+        Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-public static class FontUtil {
-    [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    public static extern int AddFontResourceEx(string lpszFilename, uint fl, IntPtr pdv);
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern int SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+
+namespace Win32 {
+    public static class FontUtil {
+        [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern int AddFontResourceEx(string lpszFilename, uint fl, IntPtr pdv);
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern int SendMessageTimeout(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam, uint fuFlags, uint uTimeout, out IntPtr lpdwResult);
+    }
 }
 "@
     }

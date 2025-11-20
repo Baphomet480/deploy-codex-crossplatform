@@ -146,6 +146,8 @@ function Test-Prerequisites {
         throw 'Administrator privileges are required to configure system defaults for Codex. Please re-run this script in an elevated PowerShell session.'
     }
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    # Allow many concurrent outbound connections for faster multi-download throughput
+    [System.Net.ServicePointManager]::DefaultConnectionLimit = 64
 }
 
 # ==================== UTILITY FUNCTIONS ====================
